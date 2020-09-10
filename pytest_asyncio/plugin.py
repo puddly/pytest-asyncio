@@ -2,8 +2,11 @@
 import asyncio
 import contextlib
 import functools
+import gc
 import inspect
 import socket
+import sys
+import warnings
 
 import pytest
 try:
@@ -166,6 +169,18 @@ def pytest_pyfunc_call(pyfuncitem):
     yield
 
 
+@contextlib.contextmanager
+def swap_attribute(obj, name, replacement):
+    """Temporarily replaces obj.name and returns the original value."""
+    old = getattr(obj, name)
+    setattr(obj, name, replacement)
+
+    try:
+        yield old
+    finally:
+        setattr(obj, name, old)
+
+
 def wrap_in_sync(func, _loop):
     """Return a sync wrapper around an async function executing it in the
     current event loop."""
@@ -175,8 +190,19 @@ def wrap_in_sync(func, _loop):
         coro = func(**kwargs)
         if coro is not None:
             task = asyncio.ensure_future(coro, loop=_loop)
+            unraisable_exceptions = []
+
+            if hasattr(sys, "unraisablehook"):
+                set_unraisablehook = swap_attribute(sys, "unraisablehook",
+                    unraisable_exceptions.append)
+            else:
+                set_unraisablehook = contextlib.nullcontext()
+
             try:
-                _loop.run_until_complete(task)
+                with warnings.catch_warnings(), set_unraisablehook:
+                    warnings.simplefilter("error")
+                    _loop.run_until_complete(task)
+                    gc.collect()
             except BaseException:
                 # run_until_complete doesn't get the result from exceptions
                 # that are not subclasses of `Exception`. Consume all
@@ -184,6 +210,11 @@ def wrap_in_sync(func, _loop):
                 if task.done() and not task.cancelled():
                     task.exception()
                 raise
+
+            # raise any unraisable exceptions if no other exceptions occured
+            for exc in unraisable_exceptions:
+                raise exc.exc_value
+
     return inner
 
 

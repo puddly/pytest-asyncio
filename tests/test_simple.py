@@ -1,6 +1,7 @@
 """Quick'n'dirty unit tests for provided fixtures and markers."""
 import asyncio
 import pytest
+import sys
 
 import pytest_asyncio.plugin
 
@@ -154,3 +155,10 @@ class TestEventLoopStartedBeforeFixtures:
 @pytest.mark.asyncio
 async def test_no_warning_on_skip():
     pytest.skip("Test a skip error inside asyncio")
+
+
+@pytest.mark.xfail(reason='coroutine not awaited warning', strict=True)
+@pytest.mark.skipif(sys.version_info < (3, 8), reason="requires python3.8 or higher")
+@pytest.mark.asyncio
+async def test_coroutine_not_awaited():
+    async_coro()
